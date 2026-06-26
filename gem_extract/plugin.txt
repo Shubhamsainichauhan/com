@@ -1,0 +1,6 @@
+VARIABLE shivamsat_target_name SHIVAMSAT
+
+TARGET SHIVAMSAT <%= shivamsat_target_name %>
+
+INTERFACE <%= shivamsat_target_name %>_INT tcpip_client_interface.rb host.docker.internal 8080 8081 10.0 nil BURST
+  MAP_TARGET <%= shivamsat_target_name %> ENABLED
