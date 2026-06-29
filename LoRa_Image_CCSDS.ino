@@ -1,46 +1,40 @@
 #include <SPI.h>
 #include <LoRa.h>
 
-// =========================================================================
-// ARDUINO UNO TO LORA (SX1278 / RFM95W) WIRING CONNECTION
-// =========================================================================
-//  LoRa Module pin   ->  Arduino Uno Pin  ->  Notes
-//  ------------------------------------------------------------------------
-//  3.3V              ->  3.3V             ->  Do NOT connect to 5V! (Needs ~120mA)
-//  GND               ->  GND              ->  Common ground
-//  MISO              ->  Pin 12           ->  Direct connection (3.3V output to 5V input is OK)
-//  MOSI              ->  Pin 11           ->  REQUIRES Level Shifter or 10k/20k Resistor Divider
-//  SCK               ->  Pin 13           ->  REQUIRES Level Shifter or 10k/20k Resistor Divider
-//  NSS (CS)          ->  Pin 10           ->  REQUIRES Level Shifter or 10k/20k Resistor Divider
-//  RST (Reset)       ->  Pin 9            ->  REQUIRES Level Shifter or 10k/20k Resistor Divider
-//  DIO0 (IRQ)        ->  Pin 2            ->  Direct connection (3.3V output to 5V input is OK)
-//
-//  *CRITICAL WARNING*: The Arduino Uno operates at 5V logic, but standard LoRa modules 
-//  operate at 3.3V. Sending 5V signals from Uno pins 10, 11, 13, and 9 can damage the 
-//  LoRa module. Use a level shifter (e.g., CD4050 or TXB0108) or simple resistor voltage 
-//  dividers on the Uno output lines.
-// =========================================================================
+/*
+ * LoRa CCSDS Satellite Image Transmitter (Teensy Version)
+ * Tuned for 433 MHz and Sync Word 0x12
+ * 
+ * HARDWARE WIRING (Teensy 3.x/4.x 3.3V Logic):
+ * 3.3V -> VCC
+ * GND  -> GND
+ * Pin 10 -> NSS / CS
+ * Pin 13 -> SCK
+ * Pin 12 -> MISO
+ * Pin 11 -> MOSI
+ * Pin 9  -> RST
+ * Pin 2  -> DIO0
+ * 
+ * *NOTE*: Teensy operates natively at 3.3V logic level. You do NOT need 
+ * level shifters or resistor dividers. Connect directly!
+ */
 
 #define NSS_PIN   10
 #define RESET_PIN 9
 #define DIO0_PIN  2
 
-// LoRa Frequency Settings (Change depending on your region: e.g. 433E6, 868E6, 915E6)
+// LoRa Frequency Settings
 #define LORA_FREQUENCY 433E6
+const int LORA_SYNC_WORD = 0x12;
 
 // CCSDS APID configuration
 #define APID_IMAGE 0x0A0  // Application Process ID for Image telemetry
 
 // Max chunk size for image slice inside a LoRa packet.
-// For Arduino Uno, 128 bytes is highly recommended to stay within the 2KB SRAM budget
-// while maximizing packet reliability.
 #define IMAGE_CHUNK_SIZE 128
 
 // --- Dummy Image Data (A tiny 1x1 green dot JPEG for initial testing) ---
-// Since the Arduino Uno has only 2 KB of SRAM, storing images in RAM is impossible.
-// We use PROGMEM (Flash memory) to store our test image.
-// Uno has 32 KB of Flash, allowing us to store static images up to ~25 KB.
-const uint8_t PROGMEM dummy_jpeg[] = {
+const uint8_t dummy_jpeg[] = {
   0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x60,
   0x00, 0x60, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08,
   0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
@@ -56,10 +50,6 @@ const uint32_t dummy_jpeg_len = sizeof(dummy_jpeg);
 uint16_t globalSequenceCount = 0;
 
 // --- Function to build the CCSDS Primary Header ---
-// Structure is 6 bytes (48 bits):
-// - Packet ID (16 bits): Version (3 bits) | Type (1 bit) | Sec Header (1 bit) | APID (11 bits)
-// - Packet Sequence Control (16 bits): Sequence Flags (2 bits) | Sequence Count (14 bits)
-// - Packet Data Length (16 bits): Payload Size - 1
 void buildCCSDSHeader(uint8_t *header, uint16_t apid, uint8_t seqFlags, uint16_t seqCount, uint16_t payloadSize) {
   uint16_t packetID = apid & 0x07FF; 
   uint16_t seqControl = ((seqFlags & 0x03) << 14) | (seqCount & 0x3FFF);
@@ -75,25 +65,27 @@ void buildCCSDSHeader(uint8_t *header, uint16_t apid, uint8_t seqFlags, uint16_t
 
 void setup() {
   Serial.begin(9600);
-  while (!Serial);
+  while (!Serial && millis() < 4000); // Wait for Teensy Serial
 
-  Serial.println(F("Starting Arduino Uno CCSDS LoRa Image Transmitter..."));
+  Serial.println(F("Starting Teensy CCSDS LoRa Image Transmitter..."));
 
   // Configure SPI Pins
   LoRa.setPins(NSS_PIN, RESET_PIN, DIO0_PIN);
 
   // Initialize LoRa transceiver
   if (!LoRa.begin(LORA_FREQUENCY)) {
-    Serial.println(F("Starting LoRa failed! Check wiring & level shifters."));
+    Serial.println(F("Starting LoRa failed! Check wiring."));
     while (1);
   }
 
-  // Adjust LoRa settings for range and reliability
+  // Adjust LoRa settings to match receiver parameters
   LoRa.setTxPower(17);
-  LoRa.setSpreadingFactor(7);
-  LoRa.setSignalBandwidth(125E3);
-  LoRa.setCodingRate4(5);
-  LoRa.enableCrc();
+  LoRa.setSpreadingFactor(9);             // Set to SF9
+  LoRa.setSignalBandwidth(125E3);          // Set to 125 kHz
+  LoRa.setCodingRate4(7);                  // Set to Coding Rate 4/7
+  LoRa.setSyncWord(LORA_SYNC_WORD);        // Set Sync Word to 0x12
+  LoRa.setPreambleLength(8);               // Set Preamble Length to 8
+  LoRa.enableCrc();                        // Enable CRC
 
   Serial.println(F("LoRa Transceiver Initialized successfully."));
 }
